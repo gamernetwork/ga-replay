@@ -2,6 +2,9 @@ import csv, time, requests, os
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
+import asyncio
+from aiohttp import ClientSession
+
 from ga_replay.analytics import analytics
 import config
 
@@ -72,16 +75,24 @@ def simple_request(domain, path, extra_dimensions):
     url = "http://%s%s" % (domain, path)
     requests.get(url)
 
-def analytics_request(domain, path, extra_dimensions=[]):
-    """
-    Simulate an analytics request for our traffic.
+#def analytics_request(domain, path, extra_dimensions=[]):
+#    """
+#    Simulate an analytics request for our traffic.
+#
+#    This is pretty specific for a proprietary analytics platform...
+#    """
+#    analytics_host = config.ANALYTICS_HOST
+#    url = "http://%s/record_pageview/" % analytics_host
+#    data = {'path': path, 'site': domain, 'referrer': extra_dimensions[0]}
+#    requests.post(url, data=data)
 
-    This is pretty specific for a proprietary analytics platform...
-    """
+async def analytics_request(domain, path, extra_dimensions=[]):
     analytics_host = config.ANALYTICS_HOST
-    url = "http://%s/record_pageview/" % analytics_host
     data = {'path': path, 'site': domain, 'referrer': extra_dimensions[0]}
-    requests.post(url, data=data)
+    url = "http://%s/record_pageview/" % analytics_host
+    async with ClientSession() as session:
+        async with session.post(url, data=data) as response:
+            response = await response.read()
 
 REQUEST_FUNCTIONS = {
     "dummy": dummy_request,
@@ -106,6 +117,8 @@ def _load_itinerary(itinerary_path):
 def buckets(items, bucket_count):
     bucket_size = len(items) / float(bucket_count)
     return [ items[int(round(bucket_size * i)): int(round(bucket_size * (i + 1)))] for i in range(bucket_count) ]
+
+loop = asyncio.get_event_loop()
 
 # TODO: Make this asynchronous. Maybe using this approach:
 #   http://pawelmhm.github.io/asyncio/python/aiohttp/2016/04/22/asyncio-aiohttp.html
@@ -143,12 +156,19 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
         request_buckets = buckets(requests, REQUEST_BUCKETS)
         for bucket_count, request_bucket in enumerate(request_buckets, 1):
             next_bucket_start = minute_start + (timedelta(seconds=60/REQUEST_BUCKETS) * bucket_count)
+            start = time.time()
+            request_tasks = []
             for request in request_bucket:
                 pageviews = int(request[-1])
                 # For each request in the itinerary, simulate the number of requests
                 #   logged by `pageviews`
                 for i in range(0, pageviews):
-                    request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+                    task = asyncio.ensure_future(
+                        request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+                    )
+                    request_tasks.append(task)
+            loop.run_until_complete(asyncio.wait(request_tasks))
+            #print("Took %s" % (time.time() - start))
             # Wait until it's time to move on to the next request bucket
             while True:
                 if datetime.now() < next_bucket_start and bucket_count < REQUEST_BUCKETS:
