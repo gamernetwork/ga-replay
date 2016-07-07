@@ -1,0 +1,6 @@
+CLIENT_EMAIL = 'your-client-email@developer.gserviceaccount.com'
+KEY_FILE = 'path/to/your/p12file.p12'
+ANALYTICS_HOST = "your-analytics.com"
+
+GA_SITES = {'your.site.com':'ga:1234567'}
+

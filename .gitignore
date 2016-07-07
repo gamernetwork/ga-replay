@@ -87,3 +87,8 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+#ga-replay specific..
+config.py
+*.p12
+itineraries/*
