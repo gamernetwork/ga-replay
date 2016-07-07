@@ -8,6 +8,11 @@ import config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
+try:
+    REQUEST_BUCKETS = config.REQUEST_BUCKETS
+except AttributeError:
+    REQUEST_BUCKETS = 6
+
 def _write_itinerary(itinerary, outfile_path):
     """
     Write itinerary to CSV file.
@@ -98,6 +103,10 @@ def _load_itinerary(itinerary_path):
             itinerary[key] = [row]
     return itinerary
 
+def buckets(items, bucket_count):
+    bucket_size = len(items) / float(bucket_count)
+    return [ items[int(round(bucket_size * i)): int(round(bucket_size * (i + 1)))] for i in range(bucket_count) ]
+
 # TODO: Make this asynchronous. Maybe using this approach:
 #   http://pawelmhm.github.io/asyncio/python/aiohttp/2016/04/22/asyncio-aiohttp.html
 #   Right now, this is fast enough for our purposes though...  Still huge waits
@@ -118,29 +127,42 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
         start_time = int(start_time)
         first_timestamp_index = all_itinerary_timestamps.index(start_time)
         all_itinerary_timestamps = all_itinerary_timestamps[first_timestamp_index:]
+
     timestamp = all_itinerary_timestamps.pop(0)
     next_run = datetime.now()
+    start = datetime.now()
+    start_timestamp = timestamp
     print("**** Replaying traffic... ****")
     while True:
+        minute_start = datetime.now()
         if datetime.now() < next_run:
             # It's not time to run the next timestamp in the itinerary yet, so hold off
             time.sleep(1)
             continue
-        start = datetime.now()
         requests = itinerary[timestamp]
-        for request in requests:
-            pageviews = int(request[-1])
-            # For each request in the itinerary, simulate the number of requests
-            #   logged by `pageviews`
-            for i in range(0, pageviews):
-                request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+        request_buckets = buckets(requests, REQUEST_BUCKETS)
+        for bucket_count, request_bucket in enumerate(request_buckets, 1):
+            next_bucket_start = minute_start + (timedelta(seconds=60/REQUEST_BUCKETS) * bucket_count)
+            for request in request_bucket:
+                pageviews = int(request[-1])
+                # For each request in the itinerary, simulate the number of requests
+                #   logged by `pageviews`
+                for i in range(0, pageviews):
+                    request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+            # Wait until it's time to move on to the next request bucket
+            while True:
+                if datetime.now() < next_bucket_start and bucket_count < REQUEST_BUCKETS:
+                    time.sleep(1)
+                    continue
+                else:
+                    break
         # What's the next timestamp we need to move on to?
         try:
             next_timestamp = all_itinerary_timestamps.pop(0)
         except IndexError:
             break
-        minutes_passed = next_timestamp - timestamp
         # When should we start running the itinerary for the next timestamp?
-        next_run = start + timedelta(minutes=minutes_passed)
         timestamp = next_timestamp
+        total_minutes_passed = timestamp - start_timestamp
+        next_run = start + (timedelta(minutes=1) * total_minutes_passed)
     print("**** Done! ****")
