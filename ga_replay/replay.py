@@ -106,15 +106,21 @@ def _load_itinerary(itinerary_path):
     return itinerary
 
 def buckets(items, bucket_count):
+    """
+    Split a list in to (roughly) evenly sized buckets.
+
+    Args:
+        * `items` - `list` - the items to split in to buckets
+        * `bucket_count` - `int` - the number of buckets to split in to
+
+    Returns:
+        A list of `bucket_count` buckets
+    """
     bucket_size = len(items) / float(bucket_count)
     return [ items[int(round(bucket_size * i)): int(round(bucket_size * (i + 1)))] for i in range(bucket_count) ]
 
 loop = asyncio.get_event_loop()
 
-# TODO: Make this asynchronous. Maybe using this approach:
-#   http://pawelmhm.github.io/asyncio/python/aiohttp/2016/04/22/asyncio-aiohttp.html
-#   Right now, this is fast enough for our purposes though...  Still huge waits
-#   between minutes even for an inventory with few thousand requests per min..
 def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_time=None):
     """
     Run the network requests in a given itinerary to replay traffic.

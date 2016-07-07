@@ -23,6 +23,19 @@ class Analytics(object):
 
     def get_itinerary(self, start, end, ga_id, extra_dimensions=[]):
         """
+        Get a traffic itinerary between a set of dates for a particular
+        google analytics property.
+
+        Args:
+            * `start` - `date` - Query GA for pageviews starting on this date
+            * `end` - `date` - Query GA for pageviews ending on this date
+            * `ga_id` - `string` - Google Analytics property id
+            * `extra_dimensions` - `iterable` - Additional dimensions to get from
+                GA
+
+        Returns:
+            An itinerary list with rows of format 
+            `[PATH,hour,minute,[extra_dimensions],PAGEVIEWS]`
         """
         metrics = ['ga:pageviews']
         dimensions = ['ga:pagePath', 'ga:hour', 'ga:minute']
