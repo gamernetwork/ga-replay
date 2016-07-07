@@ -1,4 +1,4 @@
-import csv, time, requests, os
+import csv, time, requests, os, sys
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
@@ -76,6 +76,8 @@ async def simple_request(domain, path, extra_dimensions):
     async with ClientSession() as session:
         async with session.get(url) as response:
             response = await response.read()
+            print(".", end="")
+            sys.stdout.flush()
 
 async def analytics_request(domain, path, extra_dimensions=[]):
     analytics_host = config.ANALYTICS_HOST
@@ -84,6 +86,8 @@ async def analytics_request(domain, path, extra_dimensions=[]):
     async with ClientSession() as session:
         async with session.post(url, data=data) as response:
             response = await response.read()
+            print(".", end="")
+            sys.stdout.flush()
 
 REQUEST_FUNCTIONS = {
     "dummy": dummy_request,
@@ -99,10 +103,16 @@ def _load_itinerary(itinerary_path):
     itinerary = OrderedDict({})
     for row in flat_itinerary:
         key = int(row[0] + row[1])
+        pageviews = int(row[-1])
         try:
-            itinerary[key].append(row)
+            itinerary[key]['itinerary'].extend([row] * pageviews)
+            itinerary[key]['total_pageviews'] += pageviews
         except KeyError:
-            itinerary[key] = [row]
+            itinerary[key] = {
+                'itinerary': [row] * pageviews, 
+                'timestamp': row[0] + row[1], 
+                'total_pageviews': pageviews
+            }
     return itinerary
 
 def buckets(items, bucket_count):
@@ -149,20 +159,23 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
             # It's not time to run the next timestamp in the itinerary yet, so hold off
             time.sleep(1)
             continue
-        requests = itinerary[timestamp]
+        print()
+        print("Replaying %s (%s pageviews)" % \
+            (itinerary[timestamp]['timestamp'], 
+            itinerary[timestamp]['total_pageviews'])
+        )
+        requests = itinerary[timestamp]['itinerary']
         request_buckets = buckets(requests, REQUEST_BUCKETS)
         for bucket_count, request_bucket in enumerate(request_buckets, 1):
             next_bucket_start = minute_start + (timedelta(seconds=60/REQUEST_BUCKETS) * bucket_count)
             request_tasks = []
             for request in request_bucket:
-                pageviews = int(request[-1])
                 # For each request in the itinerary, simulate the number of requests
                 #   logged by `pageviews`
-                for i in range(0, pageviews):
-                    task = asyncio.ensure_future(
-                        request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
-                    )
-                    request_tasks.append(task)
+                task = asyncio.ensure_future(
+                    request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+                )
+                request_tasks.append(task)
             loop.run_until_complete(asyncio.wait(request_tasks))
             # Wait until it's time to move on to the next request bucket
             while True:
