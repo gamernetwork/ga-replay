@@ -58,8 +58,9 @@ GOTCHAS
 
 - The Google Analytics API does not provide a `ga:seconds` dimension.  This means
   that the highest resolution of data that can be acted on is per-minute. 
-  So the simulator attempts to even out requests across a minute by dividing the
-  minute in to `config.REQUEST_BUCKETS` buckets (6 10-second buckets, by default).
-  The result is that simulated traffic is likely to spike around the start of
-  each request bucket and real spikes that happened on a site between minutes are
-  difficult to model.
+  So the simulator attempts to evenly distribute requests across a minute by 
+  running requests asynchronously using `asyncio` 
+  (https://docs.python.org/3/library/asyncio.html) - a random async sleep between 0
+  and 59 seconds is imposed on each request, which leads to a smooth interpolation
+  of requests across a minute.  
+  So, this approach will not accurately reflect traffic spikes between minutes.

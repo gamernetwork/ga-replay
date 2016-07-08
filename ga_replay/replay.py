@@ -1,4 +1,4 @@
-import csv, time, requests, os, sys
+import csv, time, requests, os, sys, random
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
@@ -10,11 +10,6 @@ import config
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-
-try:
-    REQUEST_BUCKETS = config.REQUEST_BUCKETS
-except AttributeError:
-    REQUEST_BUCKETS = 6
 
 def _write_itinerary(itinerary, outfile_path):
     """
@@ -69,9 +64,13 @@ def get_itinerary(start, end, sites, outfile_path=None, extra_dimensions=[]):
     print("**** DONE ****")
 
 async def dummy_request(domain, path, extra_dimensions=[]):
+    """
+    """
     print("Requesting %s %s %s" % (domain, path, extra_dimensions))
 
 async def simple_request(domain, path, extra_dimensions):
+    """
+    """
     url = "http://%s%s" % (domain, path)
     async with ClientSession() as session:
         async with session.get(url) as response:
@@ -80,6 +79,8 @@ async def simple_request(domain, path, extra_dimensions):
             sys.stdout.flush()
 
 async def analytics_request(domain, path, extra_dimensions=[]):
+    """
+    """
     analytics_host = config.ANALYTICS_HOST
     data = {'path': path, 'site': domain, 'referrer': extra_dimensions[0]}
     url = "http://%s/record_pageview/" % analytics_host
@@ -89,6 +90,13 @@ async def analytics_request(domain, path, extra_dimensions=[]):
             print(".", end="")
             sys.stdout.flush()
 
+async def run_request(request_func, request, seconds=59):
+    """
+    """
+    random_delay = random.random() * seconds
+    await asyncio.sleep(random_delay)
+    await request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+
 REQUEST_FUNCTIONS = {
     "dummy": dummy_request,
     "simple": simple_request,
@@ -96,6 +104,8 @@ REQUEST_FUNCTIONS = {
 }
 
 def _load_itinerary(itinerary_path):
+    """
+    """
     flat_itinerary = []
     with open(itinerary_path, "rt") as f:
         reader = csv.reader(f)
@@ -114,20 +124,6 @@ def _load_itinerary(itinerary_path):
                 'total_pageviews': pageviews
             }
     return itinerary
-
-def buckets(items, bucket_count):
-    """
-    Split a list in to (roughly) evenly sized buckets.
-
-    Args:
-        * `items` - `list` - the items to split in to buckets
-        * `bucket_count` - `int` - the number of buckets to split in to
-
-    Returns:
-        A list of `bucket_count` buckets
-    """
-    bucket_size = len(items) / float(bucket_count)
-    return [ items[int(round(bucket_size * i)): int(round(bucket_size * (i + 1)))] for i in range(bucket_count) ]
 
 loop = asyncio.get_event_loop()
 
@@ -157,33 +153,22 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
         minute_start = datetime.now()
         if datetime.now() < next_run:
             # It's not time to run the next timestamp in the itinerary yet, so hold off
-            time.sleep(1)
+            time.sleep(0.1)
             continue
         print()
-        print("Replaying %s (%s pageviews)" % \
+        print("Replaying %s (%s pageviews) at %s" % \
             (itinerary[timestamp]['timestamp'], 
-            itinerary[timestamp]['total_pageviews'])
+            itinerary[timestamp]['total_pageviews'],
+            datetime.now())
         )
         requests = itinerary[timestamp]['itinerary']
-        request_buckets = buckets(requests, REQUEST_BUCKETS)
-        for bucket_count, request_bucket in enumerate(request_buckets, 1):
-            next_bucket_start = minute_start + (timedelta(seconds=60/REQUEST_BUCKETS) * bucket_count)
-            request_tasks = []
-            for request in request_bucket:
-                # For each request in the itinerary, simulate the number of requests
-                #   logged by `pageviews`
-                task = asyncio.ensure_future(
-                    request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
-                )
-                request_tasks.append(task)
-            loop.run_until_complete(asyncio.wait(request_tasks))
-            # Wait until it's time to move on to the next request bucket
-            while True:
-                if datetime.now() < next_bucket_start and bucket_count < REQUEST_BUCKETS:
-                    time.sleep(1)
-                    continue
-                else:
-                    break
+        request_tasks = []
+        for request in requests:
+            task = asyncio.ensure_future(
+                run_request(request_func=request_func, request=request, seconds=59)
+            )
+            request_tasks.append(task)
+        loop.run_until_complete(asyncio.wait(request_tasks))
         # What's the next timestamp we need to move on to?
         try:
             next_timestamp = all_itinerary_timestamps.pop(0)
