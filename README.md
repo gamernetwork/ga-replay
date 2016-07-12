@@ -13,6 +13,7 @@ Install
 
 Python3+ only, sorry!
 
+- Create a python3.5 virtualenv and activate it
 - `pip install -r requirements.txt`
 - Copy `config.py-example` to `config.py` and override settings as appropriate.
 
@@ -36,7 +37,7 @@ To get a traffic itinerary:
 
 To replay a traffic itinerary:
 
-`python run_replay.py itineraries/itinerary.csv simple --start 1700`
+`python run_replay.py itineraries/itinerary.csv simple --start 2016-07-04T17:00:00`
 
 Note: The above will replay production traffic against a production website!
 

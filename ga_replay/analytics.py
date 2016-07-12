@@ -38,7 +38,7 @@ class Analytics(object):
             `[PATH,hour,minute,[extra_dimensions],PAGEVIEWS]`
         """
         metrics = ['ga:pageviews']
-        dimensions = ['ga:pagePath', 'ga:hour', 'ga:minute']
+        dimensions = ['ga:pagePath', 'ga:date', 'ga:hour', 'ga:minute']
         dimensions.extend(extra_dimensions)
         ga_metrics = ','.join(metrics)
         ga_dimensions = ','.join(dimensions)
@@ -63,7 +63,7 @@ class Analytics(object):
                 results_needed = False
                 break
             else:
-                print("Requesting results [%s:%s] of %s" % (query_kwargs['start_index'], query_kwargs['max_results'], result['totalResults']))
+                print("Requesting results [%s:%s] of %s" % (query_kwargs['start_index'], current_index - 1, result['totalResults']))
                 query_kwargs['start_index'] = query_kwargs['start_index'] + max_results
         return all_rows
         

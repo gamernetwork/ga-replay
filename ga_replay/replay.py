@@ -1,4 +1,4 @@
-import csv, time, requests, os, sys, random
+import csv, time, requests, os, sys, random, re
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
@@ -26,7 +26,7 @@ def get_itinerary(start, end, sites, outfile_path=None, extra_dimensions=[]):
     logged in historical google analytics data between the dates provided.
 
     This will generate a CSV of format:
-        `HOUR,MINUTE,SITE_DOMAIN,PATH,[extra_dimensions],PAGEVIEWS`
+        `DATE,HOUR,MINUTE,SITE_DOMAIN,PATH,[extra_dimensions],PAGEVIEWS`
 
     Args:
         * `start` - `date` - the date for the itinerary to begin
@@ -52,12 +52,14 @@ def get_itinerary(start, end, sites, outfile_path=None, extra_dimensions=[]):
         for row in itinerary:
             # Transpose to format:
             # [hour, minute, site, path, extra_dimensions*, pageviews] 
-            flat_row = [row[1], row[2], site, row[0], ]
-            flat_row.extend(row[3:])
+            date_str = "%s %s:%s" % (row[1], row[2], row[3])
+            dt = datetime.strptime(date_str, "%Y%m%d %H:%M")
+            flat_row = [dt.isoformat(), site, row[0]]
+            flat_row.extend(row[4:])
             flat_itinerary.append(flat_row)
     print("**** DONE ****")
     print("**** Sorting itinerary by request time ****")
-    flat_itinerary.sort(key=lambda row: row[0] + row[1] + row[3])
+    flat_itinerary.sort(key=lambda row: row[0])
     print("**** DONE ****")
     print("**** Writing final itinerary ****")
     _write_itinerary(flat_itinerary, outfile_path)
@@ -70,32 +72,95 @@ async def dummy_request(domain, path, extra_dimensions=[]):
 
 async def simple_request(domain, path, extra_dimensions):
     """
+    Simply re-run the request against the same domain/path.
     """
     url = "http://%s%s" % (domain, path)
     async with ClientSession() as session:
         async with session.get(url) as response:
             response = await response.read()
-            print(".", end="")
-            sys.stdout.flush()
+
+def _get_analytics_section_eurogamer(path):
+    if path.startswith('/articles'):
+        return 'article'
+    if path.startswith('/jobs'):
+        return 'jobs'
+    if path.startswith('/forum'):
+        return 'forum'
+    if path.startswith('/user'):
+        return 'user'
+    if path.startswith('/search'):
+        return 'search'
+    if path.startswith('/games'):
+        return 'game'
+    if path.startswith("/profiles") or path.startswith("/inbox"):
+        return 'community'
+    return "archive"
+
+def _get_analytics_section_nlife(path):
+    if path.startswith('/news') or path.startswith('/reviews'):
+        return 'article'
+    if path.startswith('/forum'):
+        return 'forum'
+    if path.startswith('/games'):
+        return 'game'
+    return 'archive'
+
+def _get_analytics_section_prima(path):
+    if re.match("^/games/[-\w]+/[-\w]+/[-\w]+$", path):
+        return "article"
+    if re.match("^/games/[-\w]+/guides", path):
+        return "guide"
+    if path.startswith('/shop'):
+        return 'shop'
+    if path.startswith('/account'):
+        return 'community'
+    if path.startswith('/games'):
+        return 'game'
+    return 'archive'
+
+def _get_analytics_section_wordpress(path):
+    if re.match("^/[0-9]{4}/[0-9]{2}/[0-9]{2}/.+", path):
+        return "article"
+    return 'archive'
+
+def _get_analytics_section(path, domain):
+    if domain.startswith('eurogamer') or domain.startswith('usgamer') or \
+            domain.startswith('gamesindustry'):
+        return _get_analytics_section_eurogamer(path)
+    if domain.startswith('nintendolife'):
+        return _get_analytics_section_nlife(path)
+    if domain.startswith('prima'):
+        return _get_analytics_section_prima(path)
+    if domain.startswith('rockpapershotgun') or domain.startswith('vg247'):
+        return _get_analytics_section_wordpress(path)
 
 async def analytics_request(domain, path, extra_dimensions=[]):
     """
+    Call an analytics endpoint, expects extra_dimensions to contain a referrer.
     """
     analytics_host = config.ANALYTICS_HOST
-    data = {'path': path, 'site': domain, 'referrer': extra_dimensions[0]}
+    section = _get_analytics_section(path, domain)
+    data = {
+        'path': path, 'site': domain, 'referrer': extra_dimensions[0], 'section': section
+    }
     url = "http://%s/record_pageview/" % analytics_host
     async with ClientSession() as session:
         async with session.post(url, data=data) as response:
             response = await response.read()
-            print(".", end="")
-            sys.stdout.flush()
 
 async def run_request(request_func, request, seconds=59):
     """
     """
     random_delay = random.random() * seconds
     await asyncio.sleep(random_delay)
-    await request_func(domain=request[2], path=request[3], extra_dimensions=request[4:-1])
+    try:
+        result = await request_func(domain=request[1], path=request[2], extra_dimensions=request[3:-1])
+    except (Exception, e):
+        print("X", end="")
+        sys.stdout.flush()
+        return
+    print(".", end="")
+    sys.stdout.flush()
 
 REQUEST_FUNCTIONS = {
     "dummy": dummy_request,
@@ -105,6 +170,20 @@ REQUEST_FUNCTIONS = {
 
 def _load_itinerary(itinerary_path):
     """
+    Given a path to an itinerary CSV, load it in to an OrderedDict of format:
+
+    `{
+        "2017-06-31T22:00:00": {
+            "timestamp": "2017-06-31T22:00",
+            "itinerary": [
+                ["17", "00", "eurogamer.net", "/", "(direct)", 10],
+                ...
+            ],
+            "total_pageviews": 600,
+        }
+    }`
+
+    Each row in the itinerary list is a single request to call.
     """
     flat_itinerary = []
     with open(itinerary_path, "rt") as f:
@@ -112,7 +191,7 @@ def _load_itinerary(itinerary_path):
         flat_itinerary = list(reader)
     itinerary = OrderedDict({})
     for row in flat_itinerary:
-        key = int(row[0] + row[1])
+        key = row[0]
         pageviews = int(row[-1])
         try:
             itinerary[key]['itinerary'].extend([row] * pageviews)
@@ -120,12 +199,15 @@ def _load_itinerary(itinerary_path):
         except KeyError:
             itinerary[key] = {
                 'itinerary': [row] * pageviews, 
-                'timestamp': row[0] + row[1], 
+                'timestamp': row[0], 
                 'total_pageviews': pageviews
             }
     return itinerary
 
 loop = asyncio.get_event_loop()
+
+def _get_datetime(timestamp):
+    return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:00")
 
 def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_time=None):
     """
@@ -134,23 +216,22 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
     Args:
         * `itinerary_path` - `string` - the path to the itinerary CSV file to replay
         * `[request_func]` - `function` - the function to use when making a request
-        * `[start_time]` - `string` - string of format "HHMM" to indicate 
+        * `[start_time]` - `string` - string of format "YYYY-MM-DDTHH:MM:00" to indicate 
             what timestamp to start replaying the itinerary from
     """
     itinerary = _load_itinerary(itinerary_path)
     all_itinerary_timestamps = list(itinerary.keys())
     if start_time:
-        start_time = int(start_time)
         first_timestamp_index = all_itinerary_timestamps.index(start_time)
         all_itinerary_timestamps = all_itinerary_timestamps[first_timestamp_index:]
 
     timestamp = all_itinerary_timestamps.pop(0)
+    simulation_dt = _get_datetime(timestamp)
     next_run = datetime.now()
     start = datetime.now()
-    start_timestamp = timestamp
+    simulation_difference = start - simulation_dt
     print("**** Replaying traffic... ****")
     while True:
-        minute_start = datetime.now()
         if datetime.now() < next_run:
             # It's not time to run the next timestamp in the itinerary yet, so hold off
             time.sleep(0.1)
@@ -176,6 +257,6 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
             break
         # When should we start running the itinerary for the next timestamp?
         timestamp = next_timestamp
-        total_minutes_passed = timestamp - start_timestamp
-        next_run = start + (timedelta(minutes=1) * total_minutes_passed)
+        next_timestamp_dt = _get_datetime(next_timestamp)
+        next_run = next_timestamp_dt + simulation_difference
     print("**** Done! ****")
