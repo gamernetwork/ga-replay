@@ -2,6 +2,7 @@ import csv, time, requests, os, sys, random, re
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
+from numpy import random as numpy_random
 import asyncio
 from aiohttp import ClientSession
 
@@ -134,15 +135,62 @@ def _get_analytics_section(path, domain):
     if domain.startswith('rockpapershotgun') or domain.startswith('vg247'):
         return _get_analytics_section_wordpress(path)
 
+article_publish_times = {}
+def _get_article_published(path, domain):
+    full_path = domain + path
+    try:
+        return article_publish_times[full_path]
+    except KeyError:
+        article_publish_times[full_path] = datetime.now().isoformat()
+        return article_publish_times[full_path]
+
+platform_distributions = [
+    (30, "PlayStation 4"),
+    (20, "Xbox One"),
+    (15, "PC"),
+    (5, "PlayStation 3"),
+    (5, "Xbox 360"),
+    (10, "Wii U"),
+    (10, "3DS"),
+    (5, "Nintendo NX"),
+]
+platform_choices = []
+platform_probabilities = []
+for prob, choice in platform_distributions:
+    platform_choices.append(choice)
+    platform_probabilities.append(prob * 0.01)
+
+def _get_randomised_platforms():
+    platforms = []
+    platform_count = int(random.random() * 5)
+    for i in range(platform_count):
+        platform = numpy_random.choice(platform_choices, p=platform_probabilities)
+        platforms.append(platform)
+    return platforms
+
+article_platforms = {}
+def _get_article_platforms(path, domain):
+    full_path = domain + path
+    try:
+        return article_platforms[full_path]
+    except KeyError:
+        article_platforms[full_path] = _get_randomised_platforms()
+        return article_platforms[full_path]
+
 async def analytics_request(domain, path, extra_dimensions=[]):
     """
     Call an analytics endpoint, expects extra_dimensions to contain a referrer.
     """
     analytics_host = config.ANALYTICS_HOST
     section = _get_analytics_section(path, domain)
+    published = _get_article_published(path, domain)
     data = {
-        'path': path, 'site': domain, 'referrer': extra_dimensions[0], 'section': section
+        'path': path, 'site': domain, 'referrer': extra_dimensions[0], 
+        'section': section, 'published': published
     }
+    if section == "article":
+        platforms = _get_article_platforms(path, domain)
+        data['platforms'] = ','.join(platforms)
     url = "http://%s/record_pageview/" % analytics_host
     async with ClientSession() as session:
         async with session.post(url, data=data) as response:
