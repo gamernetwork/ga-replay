@@ -9,9 +9,15 @@ parser.add_argument('itinerary', type=str,
 parser.add_argument('request_function', type=str,
                     help='The request function to use - in `ga_replay.replay.REQUEST_FUNCTIONS`')
 parser.add_argument('--start', type=str, default=None)
+parser.add_argument('--nonstop', default=False, action='store_true')
+parser.add_argument('--concurrency', type=int, default=100)
 args = parser.parse_args()
 
 request_func = REQUEST_FUNCTIONS[args.request_function]
 
+realtime = True
+if args.nonstop:
+    realtime = False
+
 simulate_from_itinerary(args.itinerary, request_func=request_func, 
-    start_time=args.start)
+    start_time=args.start, realtime=realtime, concurrency=args.concurrency)

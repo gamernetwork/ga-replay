@@ -1,4 +1,5 @@
 import csv, time, requests, os, sys, random, re
+from math import ceil
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
@@ -19,6 +20,9 @@ def _write_itinerary(itinerary, outfile_path):
     with open(outfile_path, "wt") as f:
         writer = csv.writer(f)
         writer.writerows(itinerary)
+
+def _get_datetime(timestamp):
+    return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:00")
     
 def get_itinerary(start, end, sites, outfile_path=None, extra_dimensions=[]):
     """
@@ -66,12 +70,12 @@ def get_itinerary(start, end, sites, outfile_path=None, extra_dimensions=[]):
     _write_itinerary(flat_itinerary, outfile_path)
     print("**** DONE ****")
 
-async def dummy_request(domain, path, extra_dimensions=[]):
+async def dummy_request(domain, path, extra_dimensions=[], realtime=True):
     """
     """
     print("Requesting %s %s %s" % (domain, path, extra_dimensions))
 
-async def simple_request(domain, path, extra_dimensions):
+async def simple_request(domain, path, extra_dimensions, realtime=True):
     """
     Simply re-run the request against the same domain/path.
     """
@@ -136,12 +140,14 @@ def _get_analytics_section(path, domain):
         return _get_analytics_section_wordpress(path)
 
 article_publish_times = {}
-def _get_article_published(path, domain):
+def _get_article_published(path, domain, origin=None):
+    if not origin:
+        origin = datetime.now().isoformat()
     full_path = domain + path
     try:
         return article_publish_times[full_path]
     except KeyError:
-        article_publish_times[full_path] = datetime.now().isoformat()
+        article_publish_times[full_path] = origin
         return article_publish_times[full_path]
 
 platform_distributions = [
@@ -177,17 +183,22 @@ def _get_article_platforms(path, domain):
         article_platforms[full_path] = _get_randomised_platforms()
         return article_platforms[full_path]
 
-async def analytics_request(domain, path, extra_dimensions=[]):
+async def analytics_request(domain, path, extra_dimensions, timestamp, realtime=True):
     """
     Call an analytics endpoint, expects extra_dimensions to contain a referrer.
     """
     analytics_host = config.ANALYTICS_HOST
     section = _get_analytics_section(path, domain)
-    published = _get_article_published(path, domain)
+    if realtime:
+        published = _get_article_published(path, domain)
+    else:
+        published = _get_article_published(path, domain, origin=timestamp)
     data = {
         'path': path, 'site': domain, 'referrer': extra_dimensions[0], 
         'section': section, 'published': published
     }
+    if not realtime:
+        data['timestamp'] = timestamp
     if section == "article":
         platforms = _get_article_platforms(path, domain)
         data['platforms'] = ','.join(platforms)
@@ -196,15 +207,20 @@ async def analytics_request(domain, path, extra_dimensions=[]):
         async with session.post(url, data=data) as response:
             response = await response.read()
 
-async def run_request(request_func, request, seconds=59):
+async def run_request(request_func, request, seconds=59, realtime=True):
     """
     """
     random_delay = random.random() * seconds
-    await asyncio.sleep(random_delay)
+    timestamp_dt = _get_datetime(request[0]) + timedelta(seconds=random_delay)
+    timestamp = timestamp_dt.isoformat()
+    if realtime:
+        await asyncio.sleep(random_delay)
     try:
-        result = await request_func(domain=request[1], path=request[2], extra_dimensions=request[3:-1])
-    except (Exception, e):
+        result = await request_func(domain=request[1], path=request[2], 
+            extra_dimensions=request[3:-1], timestamp=timestamp, realtime=realtime)
+    except Exception as e:
         print("X", end="")
+        print(e)
         sys.stdout.flush()
         return
     print(".", end="")
@@ -238,9 +254,11 @@ def _load_itinerary(itinerary_path):
         reader = csv.reader(f)
         flat_itinerary = list(reader)
     itinerary = OrderedDict({})
+    total_pageviews = 0
     for row in flat_itinerary:
         key = row[0]
         pageviews = int(row[-1])
+        total_pageviews += pageviews
         try:
             itinerary[key]['itinerary'].extend([row] * pageviews)
             itinerary[key]['total_pageviews'] += pageviews
@@ -250,14 +268,34 @@ def _load_itinerary(itinerary_path):
                 'timestamp': row[0], 
                 'total_pageviews': pageviews
             }
+    print("Loaded itinerary of %s total pageviews" % total_pageviews)
     return itinerary
 
 loop = asyncio.get_event_loop()
 
-def _get_datetime(timestamp):
-    return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:00")
+def _run_realtime(request_func, requests):
+    request_tasks = []
+    for request in requests:
+        task = asyncio.ensure_future(
+            run_request(request_func=request_func, request=request, seconds=59, realtime=True)
+        )
+        request_tasks.append(task)
+    loop.run_until_complete(asyncio.wait(request_tasks))
 
-def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_time=None):
+def _run_nonstop(request_func, requests, concurrency):
+    batches = ceil(len(requests) / concurrency)
+    for batch in range(1, batches + 1):
+        start_index = (batch - 1) * concurrency
+        end_index = start_index + concurrency
+        request_tasks = []
+        for request in requests[start_index:end_index]:
+            task = asyncio.ensure_future(
+                run_request(request_func=request_func, request=request, seconds=59, realtime=False)
+            )
+            request_tasks.append(task)
+        loop.run_until_complete(asyncio.wait(request_tasks))
+
+def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_time=None, realtime=True, concurrency=100):
     """
     Run the network requests in a given itinerary to replay traffic.
 
@@ -267,7 +305,9 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
         * `[start_time]` - `string` - string of format "YYYY-MM-DDTHH:MM:00" to indicate 
             what timestamp to start replaying the itinerary from
     """
+    print("**** Loading itinerary... *****")
     itinerary = _load_itinerary(itinerary_path)
+    print("**** Itinerary loaded! *****")
     all_itinerary_timestamps = list(itinerary.keys())
     if start_time:
         first_timestamp_index = all_itinerary_timestamps.index(start_time)
@@ -280,7 +320,8 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
     simulation_difference = start - simulation_dt
     print("**** Replaying traffic... ****")
     while True:
-        if datetime.now() < next_run:
+        loop_start = time.time()
+        if realtime and datetime.now() < next_run:
             # It's not time to run the next timestamp in the itinerary yet, so hold off
             time.sleep(0.1)
             continue
@@ -291,13 +332,10 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
             datetime.now())
         )
         requests = itinerary[timestamp]['itinerary']
-        request_tasks = []
-        for request in requests:
-            task = asyncio.ensure_future(
-                run_request(request_func=request_func, request=request, seconds=59)
-            )
-            request_tasks.append(task)
-        loop.run_until_complete(asyncio.wait(request_tasks))
+        if realtime:
+            _run_realtime(request_func, requests)
+        else:
+            _run_nonstop(request_func, requests, concurrency)
         # What's the next timestamp we need to move on to?
         try:
             next_timestamp = all_itinerary_timestamps.pop(0)
@@ -307,4 +345,7 @@ def simulate_from_itinerary(itinerary_path, request_func=dummy_request, start_ti
         timestamp = next_timestamp
         next_timestamp_dt = _get_datetime(next_timestamp)
         next_run = next_timestamp_dt + simulation_difference
+        if not realtime:
+            print("Replayed %s pageviews in %s seconds" % \
+                (itinerary[timestamp]['total_pageviews'], ceil(time.time() - loop_start)))
     print("**** Done! ****")
