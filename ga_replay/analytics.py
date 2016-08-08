@@ -19,7 +19,12 @@ class Analytics(object):
         self.ga = ga_service.data().ga()   
     
     def execute_query(self, query):
-        return query.execute()	
+        for i in range(5):
+            try:
+                return query.execute()	
+            except errors.HttpError as e:
+                continue
+        raise e
 
     def get_itinerary(self, start, end, ga_id, extra_dimensions=[]):
         """

@@ -1,4 +1,5 @@
-import csv, time, requests, os, sys, random, re
+import csv, time, requests, os, sys, random, re, logging
+from urllib.parse import urlencode
 from math import ceil
 from datetime import datetime, timedelta
 from collections import OrderedDict
@@ -12,6 +13,8 @@ import config
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
+
+logging.basicConfig(filename="urls.log", level=logging.INFO)
 
 def _write_itinerary(itinerary, outfile_path):
     """
@@ -151,14 +154,14 @@ def _get_article_published(path, domain, origin=None):
         return article_publish_times[full_path]
 
 platform_distributions = [
-    (30, "PlayStation 4"),
-    (20, "Xbox One"),
-    (15, "PC"),
-    (5, "PlayStation 3"),
-    (5, "Xbox 360"),
-    (10, "Wii U"),
-    (10, "3DS"),
-    (5, "Nintendo NX"),
+    (30, "ps4"),
+    (20, "xboxone"),
+    (15, "pc"),
+    (5, "ps3"),
+    (5, "xbox360"),
+    (10, "wiiu"),
+    (10, "3ds"),
+    (5, "nx"),
 ]
 platform_choices = []
 platform_probabilities = []
@@ -193,18 +196,24 @@ async def analytics_request(domain, path, extra_dimensions, timestamp, realtime=
         published = _get_article_published(path, domain)
     else:
         published = _get_article_published(path, domain, origin=timestamp)
+    referrer = extra_dimensions[0]
     data = {
-        'path': path, 'site': domain, 'referrer': extra_dimensions[0], 
+        'url': path, 'language': 'en', 'site': domain, 
         'section': section, 'published': published
     }
+    if referrer != "(not set)":
+        data['referrer'] = referrer
     if not realtime:
         data['timestamp'] = timestamp
     if section == "article":
         platforms = _get_article_platforms(path, domain)
-        data['platforms'] = ','.join(platforms)
-    url = "http://%s/record_pageview/" % analytics_host
+        data['platforms'] = '||'.join(platforms)
+    url = "http://%s/api/v1/register_pageview" % analytics_host
+    params = urlencode(data)
+    full_url = '?'.join([url, params])
+    logging.info(full_url)
     async with ClientSession() as session:
-        async with session.post(url, data=data) as response:
+        async with session.get(full_url) as response:
             response = await response.read()
 
 async def run_request(request_func, request, seconds=59, realtime=True):
